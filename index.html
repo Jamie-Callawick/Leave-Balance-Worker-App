@@ -446,10 +446,9 @@
           <div class="provider-icon">🟢</div>
           Smartly
         </div>
-        <div class="provider-btn disabled" data-provider="ims-myob">
+        <div class="provider-btn" data-provider="ims-myob" onclick="selectProvider(this)">
           <div class="provider-icon">🔵</div>
           IMS / MYOB
-          <div class="provider-soon">Coming soon</div>
         </div>
         <div class="provider-btn disabled" data-provider="crystal-payroll">
           <div class="provider-icon">🟣</div>
@@ -540,31 +539,56 @@
   let convertedRows    = [];
   let originalFilename = '';
 
-  // ── Standard Smartly leave codes — these become the output columns ────────
-  // Source: https://smartly.co.nz/support/help-centre/employer/timesheets/timesheet-import-from-a-third-party-provider
-  const LEAVE_CODE_COLUMNS = [
-    { code: '#60', label: 'Sick Leave Taken' },
-    { code: '#61', label: 'Alt Public Holidays Taken' },
-    { code: '#62', label: 'Statutory Holiday Taken' },
-    { code: '#63', label: 'Bereavement Leave Taken' },
-    { code: '#64', label: 'Lieu Taken' },
-    { code: '#65', label: 'Long Service Leave Taken' },
-    { code: '#66', label: 'LWOP Taken' },
-    { code: '#67', label: 'Domestic Leave Taken' },
-    { code: '#70', label: 'Annual Leave Taken' },
-    { code: '#71', label: 'Special Leave Taken' },
-    { code: '#81', label: 'Alt Public Holidays Earned' },
-    { code: '#84', label: 'Lieu Earned' },
-  ];
+  // ── Per-provider output columns ────────────────────────────────────────────
+  const PROVIDER_COLUMNS = {
+    // Smartly: standard import codes
+    // Source: https://smartly.co.nz/support/help-centre/employer/timesheets/timesheet-import-from-a-third-party-provider
+    smartly: [
+      { code: '#60', label: 'Sick Leave Taken' },
+      { code: '#61', label: 'Alt Public Holidays Taken' },
+      { code: '#62', label: 'Statutory Holiday Taken' },
+      { code: '#63', label: 'Bereavement Leave Taken' },
+      { code: '#64', label: 'Lieu Taken' },
+      { code: '#65', label: 'Long Service Leave Taken' },
+      { code: '#66', label: 'LWOP Taken' },
+      { code: '#67', label: 'Domestic Leave Taken' },
+      { code: '#70', label: 'Annual Leave Taken' },
+      { code: '#71', label: 'Special Leave Taken' },
+      { code: '#81', label: 'Alt Public Holidays Earned' },
+      { code: '#84', label: 'Lieu Earned' },
+    ],
+    // IMS / MYOB: original field names from the export, no mapping
+    'ims-myob': [
+      { code: 'AL Balance',      label: 'Annual Leave Balance' },
+      { code: 'AL Accrued',      label: 'Annual Leave Accrued' },
+      { code: 'AL in Advance',   label: 'Annual Leave in Advance' },
+      { code: 'AL Outstanding',  label: 'Annual Leave Outstanding' },
+      { code: 'PL Outstanding',  label: 'Parental Leave Outstanding' },
+      { code: 'SL Balance',      label: 'Sick Leave Balance' },
+      { code: 'FVL Balance',     label: 'Family Violence Leave Balance' },
+      { code: 'AH Balance',      label: 'Alternative Holidays Balance' },
+      { code: 'TIL Balance',     label: 'Time in Lieu Balance' },
+      { code: 'CL Outstanding',  label: 'Company Leave Outstanding' },
+      { code: 'SVL Outstanding', label: 'Service Leave Outstanding' },
+    ],
+  };
+
+  function getProviderColumns() {
+    return PROVIDER_COLUMNS[selectedProvider] || PROVIDER_COLUMNS.smartly;
+  }
 
   // Track which codes are selected (all on by default)
-  const selectedCodes = new Set(LEAVE_CODE_COLUMNS.map(c => c.code));
+  const selectedCodes = new Set(PROVIDER_COLUMNS.smartly.map(c => c.code));
 
   // Build the checkbox grid
   function buildLeaveCodeGrid() {
     const grid = document.getElementById('leave-code-grid');
     grid.innerHTML = '';
-    LEAVE_CODE_COLUMNS.forEach(({ code, label }) => {
+    // Reset selectedCodes to all-on for the current provider
+    selectedCodes.clear();
+    getProviderColumns().forEach(c => selectedCodes.add(c.code));
+    updateToggleBtn();
+    getProviderColumns().forEach(({ code, label }) => {
       const item = document.createElement('label');
       item.className = 'leave-code-item checked';
       item.innerHTML = `
@@ -590,7 +614,8 @@
   }
 
   function toggleAllCodes() {
-    const allChecked = selectedCodes.size === LEAVE_CODE_COLUMNS.length;
+    const cols = getProviderColumns();
+    const allChecked = selectedCodes.size === cols.length;
     const checkboxes = document.querySelectorAll('#leave-code-grid input[type=checkbox]');
     checkboxes.forEach(cb => {
       const code = cb.closest('.leave-code-item').querySelector('.leave-code-badge').textContent;
@@ -605,12 +630,12 @@
   function updateToggleBtn() {
     const btn = document.getElementById('toggle-all-btn');
     if (!btn) return;
-    btn.textContent = selectedCodes.size === LEAVE_CODE_COLUMNS.length ? 'Deselect all' : 'Select all';
+    btn.textContent = selectedCodes.size === getProviderColumns().length ? 'Deselect all' : 'Select all';
   }
 
   // Active columns for output (respects user selection, preserves original order)
   function getActiveColumns() {
-    return LEAVE_CODE_COLUMNS.filter(c => selectedCodes.has(c.code)).map(c => c.code);
+    return getProviderColumns().filter(c => selectedCodes.has(c.code)).map(c => c.code);
   }
 
   // Output: Employee Code + selected leave codes
@@ -722,7 +747,58 @@
         });
       }
     }
-    // Future providers: ims-myob, crystal-payroll
+    ,
+
+    'ims-myob': {
+      name: 'IMS / MYOB',
+
+      // Detect: IMS exports have "EMPLOYEE" in row 0 and "Employee ID" + "AL Balance" in row 1
+      detect: (lines) =>
+        lines.length > 2 &&
+        lines[0].startsWith('EMPLOYEE') &&
+        lines[1].includes('Employee ID') &&
+        lines[1].includes('AL Balance'),
+
+      // Parse: row 0 = group headers, row 1 = column headers, row 2+ = data (active rows start with "+")
+      parse: (lines) => {
+        const headers = parseCSVLine(lines[1]);
+        const rows = [];
+        for (let i = 2; i < lines.length; i++) {
+          if (!lines[i].trim()) continue;
+          const vals = parseCSVLine(lines[i]);
+          if (vals.length < 3) continue;
+          if (vals[0] !== '+') continue; // skip inactive / terminated employees
+          const obj = {};
+          headers.forEach((h, idx) => { obj[h.trim()] = (vals[idx] || '').trim(); });
+          rows.push(obj);
+        }
+        return { headers, rows };
+      },
+
+      // Convert: one row per employee — keep original IMS field names as output columns
+      convert: (rows, skipZero) => {
+        const activeFields = getActiveColumns(); // these ARE the IMS field names
+
+        return rows.map(r => {
+          // Prefer Emp No (payroll number) as the employee code
+          const empCode = r['Emp No'] || r['Employee ID'] || '';
+          if (!empCode) return null;
+
+          const row = { 'Employee Code': empCode };
+          activeFields.forEach(field => {
+            const balance = r[field] || '';
+            if (skipZero === 'yes' && (!balance || parseFloat(balance) === 0)) {
+              row[field] = '';
+            } else {
+              row[field] = balance;
+            }
+          });
+          return row;
+        }).filter(r => r !== null);
+      }
+    }
+
+    // Future providers: crystal-payroll
   };
 
   // ── Provider selection ─────────────────────────────────────────────────────
@@ -731,7 +807,7 @@
     document.querySelectorAll('.provider-btn').forEach(b => b.classList.remove('selected'));
     el.classList.add('selected');
     selectedProvider = el.dataset.provider;
-    if (parsedRows.length) runConversion();
+    if (parsedRows.length) { buildLeaveCodeGrid(); runConversion(); }
   }
 
   // ── Status helper ──────────────────────────────────────────────────────────
@@ -789,6 +865,9 @@
       selectedProvider = detected;
       document.querySelectorAll('.provider-btn').forEach(b =>
         b.classList.toggle('selected', b.dataset.provider === detected));
+      // Reset selectedCodes for the newly detected provider
+      selectedCodes.clear();
+      getProviderColumns().forEach(c => selectedCodes.add(c.code));
     }
 
     const { rows } = PROVIDERS[detected].parse(lines);
@@ -850,7 +929,8 @@
     document.getElementById('file-input').value = '';
     document.getElementById('file-status').className = 'status';
     // Reset all leave codes to selected
-    LEAVE_CODE_COLUMNS.forEach(c => selectedCodes.add(c.code));
+    selectedCodes.clear();
+    getProviderColumns().forEach(c => selectedCodes.add(c.code));
     setVisible('options-card', false);
     setVisible('preview-card', false);
   }
