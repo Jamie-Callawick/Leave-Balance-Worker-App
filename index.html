@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Leave Balance Converter — Simplifi</title>
+  <style>
+    :root {
+      --navy:        #063057;
+      --navy-dark:   #041e38;
+      --navy-light:  #e8eef5;
+      --orange:      #DC7C3A;
+      --orange-light:#fdf3eb;
+      --blue:        #26B1E7;
+      --blue-light:  #e8f7fd;
+      --success:     #16a34a;
+      --success-bg:  #f0fdf4;
+      --warn:        #d97706;
+      --warn-bg:     #fffbeb;
+      --danger:      #dc2626;
+      --danger-bg:   #fef2f2;
+      --gray-50:     #f8f9fa;
+      --gray-100:    #f3f4f6;
+      --gray-200:    #e5e7eb;
+      --gray-300:    #d1d5db;
+      --gray-500:    #6b7280;
+      --gray-700:    #374151;
+      --gray-900:    #111827;
+      --radius:      10px;
+      --shadow:      0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Aptos', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--gray-50);
+      color: var(--gray-900);
+      min-height: 100vh;
+      padding: 0 0 64px;
+    }
+
+    /* ── Header bar ─────────────────────────────────────────────────────── */
+    .top-bar {
+      background: var(--navy);
+      padding: 0 32px;
+      display: flex;
+      align-items: center;
+      height: 60px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-mark {
+      width: 32px;
+      height: 32px;
+      background: var(--orange);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .logo-mark svg { width: 20px; height: 20px; }
+
+    .logo-text {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.3px;
+    }
+
+    /* ── Hero ───────────────────────────────────────────────────────────── */
+    .hero {
+      background: linear-gradient(135deg, var(--navy) 0%, #0a4a7a 100%);
+      padding: 40px 32px 36px;
+      text-align: center;
+      color: #fff;
+    }
+
+    .hero h1 {
+      font-size: 26px;
+      font-weight: 700;
+      margin-bottom: 10px;
+      letter-spacing: -0.3px;
+    }
+
+    .hero p {
+      font-size: 15px;
+      color: rgba(255,255,255,.75);
+      line-height: 1.6;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,255,255,.12);
+      border: 1px solid rgba(255,255,255,.2);
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-size: 12px;
+      color: rgba(255,255,255,.9);
+      margin-bottom: 18px;
+    }
+
+    .hero-badge .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #4ade80;
+    }
+
+    /* ── Main content ───────────────────────────────────────────────────── */
+    .container {
+      max-width: 700px;
+      margin: 32px auto 0;
+      padding: 0 16px;
+    }
+
+    /* ── Cards ──────────────────────────────────────────────────────────── */
+    .card {
+      background: #fff;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--gray-200);
+      padding: 24px 28px;
+      margin-bottom: 18px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .step-badge {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--navy);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--navy);
+    }
+
+    /* ── Provider buttons ───────────────────────────────────────────────── */
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    .provider-btn {
+      border: 2px solid var(--gray-200);
+      border-radius: 8px;
+      padding: 14px 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      background: #fff;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--gray-700);
+      position: relative;
+    }
+
+    .provider-btn:not(.disabled):hover {
+      border-color: var(--orange);
+      background: var(--orange-light);
+    }
+
+    .provider-btn.selected {
+      border-color: var(--navy);
+      background: var(--navy-light);
+      color: var(--navy);
+    }
+
+    .provider-btn.disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    .provider-icon { font-size: 22px; margin-bottom: 6px; }
+    .provider-soon { font-size: 10px; color: var(--gray-500); margin-top: 3px; font-weight: 400; }
+
+    /* ── Drop zone ──────────────────────────────────────────────────────── */
+    .dropzone {
+      border: 2px dashed var(--gray-300);
+      border-radius: var(--radius);
+      padding: 36px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      background: var(--gray-50);
+    }
+
+    .dropzone:hover, .dropzone.drag-over {
+      border-color: var(--orange);
+      background: var(--orange-light);
+    }
+
+    .dz-icon { font-size: 34px; margin-bottom: 10px; }
+    .dz-label { font-size: 15px; font-weight: 600; color: var(--navy); margin-bottom: 4px; }
+    .dz-sub { font-size: 13px; color: var(--gray-500); }
+    .dz-link { color: var(--orange); font-weight: 500; text-decoration: none; }
+    #file-input { display: none; }
+
+    /* ── Status ─────────────────────────────────────────────────────────── */
+    .status {
+      display: none;
+      border-radius: 8px;
+      padding: 11px 14px;
+      font-size: 14px;
+      margin-top: 14px;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .status.show { display: flex; }
+    .status.success { background: var(--success-bg); color: var(--success); }
+    .status.warn    { background: var(--warn-bg);    color: var(--warn); }
+    .status.error   { background: var(--danger-bg);  color: var(--danger); }
+    .status.info    { background: var(--navy-light);  color: var(--navy); }
+
+    /* ── Options ─────────────────────────────────────────────────────────── */
+    .option-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--gray-100);
+      font-size: 14px;
+      gap: 16px;
+    }
+    .option-row:last-child { border-bottom: none; }
+    .option-label { font-weight: 600; color: var(--navy); font-size: 14px; }
+    .option-desc  { color: var(--gray-500); font-size: 12px; margin-top: 2px; }
+
+    select {
+      border: 1px solid var(--gray-300);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 14px;
+      background: #fff;
+      color: var(--gray-900);
+      font-family: inherit;
+      flex-shrink: 0;
+    }
+
+    select:focus { outline: 2px solid var(--navy); outline-offset: 1px; }
+
+    /* ── Info box ────────────────────────────────────────────────────────── */
+    .info-box {
+      background: var(--blue-light);
+      border-left: 3px solid var(--blue);
+      border-radius: 0 6px 6px 0;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--gray-700);
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+
+    /* ── Preview table ───────────────────────────────────────────────────── */
+    .preview-meta { font-size: 13px; color: var(--gray-500); margin-bottom: 10px; }
+
+    .preview-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--gray-200);
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+
+    thead { background: var(--navy); }
+    th {
+      padding: 9px 14px;
+      text-align: left;
+      font-weight: 600;
+      color: #fff;
+      font-size: 12px;
+      letter-spacing: .3px;
+    }
+
+    td { padding: 8px 14px; border-bottom: 1px solid var(--gray-100); color: var(--gray-700); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--navy-light); }
+
+    /* ── Buttons ─────────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: background .15s, transform .1s;
+      font-family: inherit;
+    }
+
+    .btn:active { transform: scale(.98); }
+
+    .btn-primary   { background: var(--orange); color: #fff; }
+    .btn-primary:hover { background: #c56b2e; }
+
+    .btn-secondary { background: var(--gray-100); color: var(--gray-700); }
+    .btn-secondary:hover { background: var(--gray-200); }
+
+    .btn-row { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+
+    /* ── Misc ────────────────────────────────────────────────────────────── */
+    .hidden { display: none !important; }
+
+    footer {
+      text-align: center;
+      margin-top: 36px;
+      font-size: 12px;
+      color: var(--gray-500);
+      padding: 0 16px;
+    }
+
+    footer a { color: var(--navy); text-decoration: none; }
+  </style>
+</head>
+<body>
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <div class="logo">
+      <div class="logo-mark">
+        <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="5" width="16" height="2.5" rx="1.25" fill="white"/>
+          <rect x="2" y="9.5" width="11" height="2.5" rx="1.25" fill="white"/>
+          <rect x="2" y="14" width="7" height="2.5" rx="1.25" fill="white"/>
+        </svg>
+      </div>
+      <span class="logo-text">Simplifi</span>
+    </div>
+  </div>
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-badge"><span class="dot"></span> Runs entirely in your browser</div>
+    <h1>Leave Balance Converter</h1>
+    <p>Convert your payroll provider's leave export into a Simplifi-ready file — no uploads, no logins, no hassle.</p>
+  </div>
+
+  <div class="container">
+
+    <!-- Step 1: Provider -->
+    <div class="card">
+      <div class="card-header">
+        <div class="step-badge">1</div>
+        <span class="card-title">Select your payroll provider</span>
+      </div>
+      <div class="provider-grid">
+        <div class="provider-btn selected" data-provider="smartly" onclick="selectProvider(this)">
+          <div class="provider-icon">🟢</div>
+          Smartly
+        </div>
+        <div class="provider-btn disabled" data-provider="ims-myob">
+          <div class="provider-icon">🔵</div>
+          IMS / MYOB
+          <div class="provider-soon">Coming soon</div>
+        </div>
+        <div class="provider-btn disabled" data-provider="crystal-payroll">
+          <div class="provider-icon">🟣</div>
+          Crystal Payroll
+          <div class="provider-soon">Coming soon</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: Upload -->
+    <div class="card">
+      <div class="card-header">
+        <div class="step-badge">2</div>
+        <span class="card-title">Upload your leave balance export</span>
+      </div>
+      <div class="dropzone" id="dropzone"
+           ondragover="onDragOver(event)" ondragleave="onDragLeave()" ondrop="onDrop(event)"
+           onclick="document.getElementById('file-input').click()">
+        <div class="dz-icon">📄</div>
+        <div class="dz-label">Drop your CSV file here</div>
+        <div class="dz-sub">or <span class="dz-link">browse to upload</span></div>
+      </div>
+      <input type="file" id="file-input" accept=".csv" onchange="onFileSelect(event)" />
+      <div class="status" id="file-status"></div>
+    </div>
+
+    <!-- Step 3: Options -->
+    <div class="card hidden" id="options-card">
+      <div class="card-header">
+        <div class="step-badge">3</div>
+        <span class="card-title">Options</span>
+      </div>
+      <div class="info-box">
+        Annual Leave balances will automatically use <strong>hours</strong>. All other leave types use the <strong>days/weeks</strong> balance, as required by Simplifi.
+      </div>
+      <div class="option-row">
+        <div>
+          <div class="option-label">Skip zero or empty balances</div>
+          <div class="option-desc">Exclude leave types where the balance is 0 or blank</div>
+        </div>
+        <select id="skip-zero" onchange="runConversion()">
+          <option value="yes">Yes — skip them</option>
+          <option value="no">No — include all</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Step 4: Preview & Download -->
+    <div class="card hidden" id="preview-card">
+      <div class="card-header">
+        <div class="step-badge">4</div>
+        <span class="card-title">Preview &amp; download</span>
+      </div>
+      <div class="preview-meta" id="preview-meta"></div>
+      <div class="preview-wrap">
+        <table id="preview-table"></table>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="downloadCSV()">⬇&nbsp; Download Simplifi CSV</button>
+        <button class="btn btn-secondary" onclick="reset()">↩&nbsp; Start over</button>
+      </div>
+    </div>
+
+  </div>
+
+  <footer>
+    All data is processed locally in your browser — nothing is sent to any server.<br>
+    &copy; <span id="yr"></span> Simplifi
+  </footer>
+
+<script>
+  document.getElementById('yr').textContent = new Date().getFullYear();
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let selectedProvider = 'smartly';
+  let parsedRows       = [];
+  let convertedRows    = [];
+  let originalFilename = '';
+
+  // ── Standard Smartly leave codes — these become the output columns ────────
+  // Source: https://smartly.co.nz/support/help-centre/employer/timesheets/timesheet-import-from-a-third-party-provider
+  const LEAVE_CODE_COLUMNS = [
+    '#60', // Sick Leave Taken
+    '#61', // Alt Public Holidays Taken
+    '#62', // Statutory Holiday Taken
+    '#63', // Bereavement Leave Taken
+    '#64', // Lieu Taken
+    '#65', // Long Service Leave Taken
+    '#66', // LWOP Taken
+    '#67', // Domestic Leave Taken
+    '#70', // Annual Leave Taken
+    '#71', // Special Leave Taken
+    '#81', // Alt Public Holidays Earned
+    '#84', // Lieu Earned
+  ];
+
+  // Output: Employee Code + one column per leave code
+  const OUTPUT_HEADERS = ['Employee Code', ...LEAVE_CODE_COLUMNS];
+
+  // ── Provider definitions ───────────────────────────────────────────────────
+  // ── Smartly leave type name → standard import code ────────────────────────
+  // Source: https://smartly.co.nz/support/help-centre/employer/timesheets/timesheet-import-from-a-third-party-provider
+  const SMARTLY_LEAVE_CODES = {
+    // Annual leave
+    'annual leave':              '#70',
+    // Sick leave
+    'sick':                      '#60',
+    'sick leave':                '#60',
+    'unpaid sick leave':         '#60',
+    // Alt public holidays
+    'alt. public holiday':       '#61',
+    'alt public holiday':        '#61',
+    'alt. public holiday taken': '#61',
+    'alt public holidays taken': '#61',
+    // Statutory
+    'statutory':                 '#62',
+    'statutory holiday taken':   '#62',
+    // Bereavement
+    'bereavement':               '#63',
+    'bereavement leave':         '#63',
+    // Lieu taken
+    'lieu taken':                '#64',
+    'lieu':                      '#64',
+    // Long service
+    'long service':              '#65',
+    'long service leave':        '#65',
+    // Leave without pay
+    'leave without pay':         '#66',
+    'lwop':                      '#66',
+    'lwop taken':                '#66',
+    // Domestic violence
+    'domestic violence':         '#67',
+    'domestic violence leave':   '#67',
+    'domestic leave':            '#67',
+    // Special leave
+    'special leave':             '#71',
+    // Alt public holidays earned
+    'alt public holidays earned': '#81',
+    // Lieu earned
+    'lieu earned':               '#84',
+  };
+
+  function mapLeaveCode(leaveType) {
+    const key = (leaveType || '').toLowerCase().trim();
+    return SMARTLY_LEAVE_CODES[key] || leaveType; // fall back to original if unmapped
+  }
+
+  const PROVIDERS = {
+    smartly: {
+      name: 'Smartly',
+      // Detect: Smartly exports start with "Pay Groups: All"
+      detect: (lines) =>
+        lines.length > 4 &&
+        lines[0].includes('Pay Groups') &&
+        lines[3].includes('Period End Date'),
+
+      // Parse: skip 5 metadata rows, row 5 (index 5) is the header
+      parse: (lines) => {
+        const headers = parseCSVLine(lines[5]);
+        const rows = [];
+        for (let i = 6; i < lines.length; i++) {
+          if (!lines[i].trim()) continue;
+          const vals = parseCSVLine(lines[i]);
+          if (vals.length < 2) continue;
+          const obj = {};
+          headers.forEach((h, idx) => { obj[h] = (vals[idx] || '').trim(); });
+          rows.push(obj);
+        }
+        return { headers, rows };
+      },
+
+      // Convert: pivot to one row per employee, one column per leave code.
+      // Annual Leave uses Balance (Hours); all other types use Balance.
+      convert: (rows, skipZero) => {
+        // Build a map: empCode → { leaveCode: balance, ... }
+        const empMap = new Map();
+
+        for (const r of rows) {
+          const empCode  = r['Employee Code'] || '';
+          if (!empCode) continue;
+
+          const isAnnual = (r['Leave Type'] || '').toLowerCase() === 'annual leave';
+          const balance  = isAnnual ? r['Balance (Hours)'] : r['Balance'];
+          const leaveCode = mapLeaveCode(r['Leave Type']);
+
+          // Skip zero/empty if option set — but only filter known codes
+          if (skipZero === 'yes') {
+            if (!balance || balance === '' || parseFloat(balance) === 0) continue;
+          }
+
+          if (!empMap.has(empCode)) empMap.set(empCode, {});
+          empMap.get(empCode)[leaveCode] = balance;
+        }
+
+        // Flatten to array of rows, one per employee
+        return Array.from(empMap.entries()).map(([empCode, balances]) => {
+          const row = { 'Employee Code': empCode };
+          LEAVE_CODE_COLUMNS.forEach(code => {
+            row[code] = balances[code] || '';
+          });
+          // Attach any unmapped leave codes as extra data (not output, just noted)
+          return row;
+        });
+      }
+    }
+    // Future providers: ims-myob, crystal-payroll
+  };
+
+  // ── Provider selection ─────────────────────────────────────────────────────
+  function selectProvider(el) {
+    if (el.classList.contains('disabled')) return;
+    document.querySelectorAll('.provider-btn').forEach(b => b.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedProvider = el.dataset.provider;
+    if (parsedRows.length) runConversion();
+  }
+
+  // ── Status helper ──────────────────────────────────────────────────────────
+  function showStatus(msg, type = 'info') {
+    const el = document.getElementById('file-status');
+    el.className = `status show ${type}`;
+    el.textContent = msg;
+  }
+
+  function setVisible(id, visible) {
+    document.getElementById(id).classList.toggle('hidden', !visible);
+  }
+
+  // ── Drag & Drop ────────────────────────────────────────────────────────────
+  function onDragOver(e) { e.preventDefault(); document.getElementById('dropzone').classList.add('drag-over'); }
+  function onDragLeave()  { document.getElementById('dropzone').classList.remove('drag-over'); }
+  function onDrop(e) {
+    e.preventDefault();
+    document.getElementById('dropzone').classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) processFile(file);
+  }
+  function onFileSelect(e) { const f = e.target.files[0]; if (f) processFile(f); }
+
+  // ── File processing ────────────────────────────────────────────────────────
+  function processFile(file) {
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      showStatus('Please upload a .csv file.', 'error'); return;
+    }
+    originalFilename = file.name;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try { handleContent(e.target.result); }
+      catch (err) { showStatus('Could not read file: ' + err.message, 'error'); }
+    };
+    reader.readAsText(file, 'utf-8');
+  }
+
+  function handleContent(content) {
+    const lines = content.split(/\r?\n/);
+
+    // Auto-detect provider
+    let detected = selectedProvider;
+    for (const [key, p] of Object.entries(PROVIDERS)) {
+      if (p.detect && p.detect(lines)) { detected = key; break; }
+    }
+
+    if (!PROVIDERS[detected]) {
+      showStatus('This provider format is not yet supported. Please contact Simplifi support.', 'warn');
+      return;
+    }
+
+    // Update selected button if auto-detected
+    if (detected !== selectedProvider) {
+      selectedProvider = detected;
+      document.querySelectorAll('.provider-btn').forEach(b =>
+        b.classList.toggle('selected', b.dataset.provider === detected));
+    }
+
+    const { rows } = PROVIDERS[detected].parse(lines);
+    parsedRows = rows;
+
+    showStatus(
+      `✓ ${rows.length} leave records loaded from "${originalFilename}" — ${PROVIDERS[detected].name} format detected`,
+      'success'
+    );
+    setVisible('options-card', true);
+    runConversion();
+  }
+
+  // ── Conversion ─────────────────────────────────────────────────────────────
+  function runConversion() {
+    if (!parsedRows.length || !PROVIDERS[selectedProvider]) return;
+    const skipZero = document.getElementById('skip-zero').value;
+    convertedRows  = PROVIDERS[selectedProvider].convert(parsedRows, skipZero);
+    renderPreview();
+    setVisible('preview-card', true);
+  }
+
+  // ── Preview ────────────────────────────────────────────────────────────────
+  function renderPreview() {
+    const max   = 10;
+    const total = convertedRows.length;
+    document.getElementById('preview-meta').textContent =
+      `${total} row${total !== 1 ? 's' : ''} ready to import` +
+      (total > max ? ` — showing first ${max}` : '');
+
+    let html = '<thead><tr>' + OUTPUT_HEADERS.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+    convertedRows.slice(0, max).forEach(row => {
+      html += '<tr>' + OUTPUT_HEADERS.map(h => `<td>${esc(row[h])}</td>`).join('') + '</tr>';
+    });
+    document.getElementById('preview-table').innerHTML = html + '</tbody>';
+  }
+
+  // ── Download ───────────────────────────────────────────────────────────────
+  function downloadCSV() {
+    const lines = [
+      OUTPUT_HEADERS.map(cell).join(','),
+      ...convertedRows.map(row => OUTPUT_HEADERS.map(h => cell(row[h])).join(','))
+    ];
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = originalFilename.replace(/\.csv$/i, '') + '_simplifi_import.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── Reset ──────────────────────────────────────────────────────────────────
+  function reset() {
+    parsedRows = []; convertedRows = []; originalFilename = '';
+    document.getElementById('file-input').value = '';
+    document.getElementById('file-status').className = 'status';
+    setVisible('options-card', false);
+    setVisible('preview-card', false);
+  }
+
+  // ── CSV utilities ──────────────────────────────────────────────────────────
+  function parseCSVLine(line) {
+    const out = []; let cur = ''; let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i + 1] === '"') { cur += '"'; i++; } else inQ = !inQ;
+      } else if (ch === ',' && !inQ) { out.push(cur.trim()); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  }
+
+  function cell(val) {
+    if (val == null) return '';
+    const s = String(val);
+    return (s.includes(',') || s.includes('"') || s.includes('\n'))
+      ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function esc(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+</script>
+</body>
+</html>
