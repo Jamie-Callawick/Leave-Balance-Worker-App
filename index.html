@@ -277,6 +277,74 @@
       line-height: 1.5;
     }
 
+    /* ── Leave code checkboxes ───────────────────────────────────────────── */
+    .leave-code-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .leave-code-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      border: 1px solid var(--gray-200);
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background .12s, border-color .12s;
+      user-select: none;
+    }
+
+    .leave-code-item:hover { background: var(--gray-50); }
+
+    .leave-code-item input[type=checkbox] {
+      width: 15px;
+      height: 15px;
+      accent-color: var(--navy);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .leave-code-item.checked {
+      border-color: var(--navy);
+      background: var(--navy-light);
+    }
+
+    .leave-code-badge {
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--navy);
+      color: #fff;
+      border-radius: 4px;
+      padding: 2px 6px;
+      letter-spacing: .3px;
+      flex-shrink: 0;
+    }
+
+    .leave-code-item.checked .leave-code-badge { background: var(--navy); }
+
+    .leave-code-label {
+      font-size: 13px;
+      color: var(--gray-700);
+      flex: 1;
+    }
+
+    .select-toggle {
+      font-size: 12px;
+      color: var(--orange);
+      font-weight: 600;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+      font-family: inherit;
+      margin-left: auto;
+    }
+
+    .select-toggle:hover { text-decoration: underline; }
+
     /* ── Preview table ───────────────────────────────────────────────────── */
     .preview-meta { font-size: 13px; color: var(--gray-500); margin-bottom: 10px; }
 
@@ -427,6 +495,17 @@
           <option value="no">No — include all</option>
         </select>
       </div>
+
+      <div class="option-row" style="flex-direction: column; align-items: flex-start; gap: 0;">
+        <div style="display:flex; align-items:center; width:100%; margin-bottom:10px;">
+          <div>
+            <div class="option-label">Leave codes to include</div>
+            <div class="option-desc">Only selected codes will appear as columns in the output</div>
+          </div>
+          <button class="select-toggle" id="toggle-all-btn" onclick="toggleAllCodes()">Deselect all</button>
+        </div>
+        <div class="leave-code-grid" id="leave-code-grid"></div>
+      </div>
     </div>
 
     <!-- Step 4: Preview & Download -->
@@ -464,22 +543,80 @@
   // ── Standard Smartly leave codes — these become the output columns ────────
   // Source: https://smartly.co.nz/support/help-centre/employer/timesheets/timesheet-import-from-a-third-party-provider
   const LEAVE_CODE_COLUMNS = [
-    '#60', // Sick Leave Taken
-    '#61', // Alt Public Holidays Taken
-    '#62', // Statutory Holiday Taken
-    '#63', // Bereavement Leave Taken
-    '#64', // Lieu Taken
-    '#65', // Long Service Leave Taken
-    '#66', // LWOP Taken
-    '#67', // Domestic Leave Taken
-    '#70', // Annual Leave Taken
-    '#71', // Special Leave Taken
-    '#81', // Alt Public Holidays Earned
-    '#84', // Lieu Earned
+    { code: '#60', label: 'Sick Leave Taken' },
+    { code: '#61', label: 'Alt Public Holidays Taken' },
+    { code: '#62', label: 'Statutory Holiday Taken' },
+    { code: '#63', label: 'Bereavement Leave Taken' },
+    { code: '#64', label: 'Lieu Taken' },
+    { code: '#65', label: 'Long Service Leave Taken' },
+    { code: '#66', label: 'LWOP Taken' },
+    { code: '#67', label: 'Domestic Leave Taken' },
+    { code: '#70', label: 'Annual Leave Taken' },
+    { code: '#71', label: 'Special Leave Taken' },
+    { code: '#81', label: 'Alt Public Holidays Earned' },
+    { code: '#84', label: 'Lieu Earned' },
   ];
 
-  // Output: Employee Code + one column per leave code
-  const OUTPUT_HEADERS = ['Employee Code', ...LEAVE_CODE_COLUMNS];
+  // Track which codes are selected (all on by default)
+  const selectedCodes = new Set(LEAVE_CODE_COLUMNS.map(c => c.code));
+
+  // Build the checkbox grid
+  function buildLeaveCodeGrid() {
+    const grid = document.getElementById('leave-code-grid');
+    grid.innerHTML = '';
+    LEAVE_CODE_COLUMNS.forEach(({ code, label }) => {
+      const item = document.createElement('label');
+      item.className = 'leave-code-item checked';
+      item.innerHTML = `
+        <input type="checkbox" checked onchange="toggleCode('${code}', this)" />
+        <span class="leave-code-badge">${code}</span>
+        <span class="leave-code-label">${label}</span>
+      `;
+      grid.appendChild(item);
+    });
+  }
+
+  function toggleCode(code, checkbox) {
+    const item = checkbox.closest('.leave-code-item');
+    if (checkbox.checked) {
+      selectedCodes.add(code);
+      item.classList.add('checked');
+    } else {
+      selectedCodes.delete(code);
+      item.classList.remove('checked');
+    }
+    updateToggleBtn();
+    runConversion();
+  }
+
+  function toggleAllCodes() {
+    const allChecked = selectedCodes.size === LEAVE_CODE_COLUMNS.length;
+    const checkboxes = document.querySelectorAll('#leave-code-grid input[type=checkbox]');
+    checkboxes.forEach(cb => {
+      const code = cb.closest('.leave-code-item').querySelector('.leave-code-badge').textContent;
+      cb.checked = !allChecked;
+      cb.closest('.leave-code-item').classList.toggle('checked', !allChecked);
+      if (!allChecked) selectedCodes.add(code); else selectedCodes.delete(code);
+    });
+    updateToggleBtn();
+    runConversion();
+  }
+
+  function updateToggleBtn() {
+    const btn = document.getElementById('toggle-all-btn');
+    if (!btn) return;
+    btn.textContent = selectedCodes.size === LEAVE_CODE_COLUMNS.length ? 'Deselect all' : 'Select all';
+  }
+
+  // Active columns for output (respects user selection, preserves original order)
+  function getActiveColumns() {
+    return LEAVE_CODE_COLUMNS.filter(c => selectedCodes.has(c.code)).map(c => c.code);
+  }
+
+  // Output: Employee Code + selected leave codes
+  function getOutputHeaders() {
+    return ['Employee Code', ...getActiveColumns()];
+  }
 
   // ── Provider definitions ───────────────────────────────────────────────────
   // ── Smartly leave type name → standard import code ────────────────────────
@@ -577,12 +714,10 @@
         }
 
         // Flatten to array of rows, one per employee
+        const activeCodes = getActiveColumns();
         return Array.from(empMap.entries()).map(([empCode, balances]) => {
           const row = { 'Employee Code': empCode };
-          LEAVE_CODE_COLUMNS.forEach(code => {
-            row[code] = balances[code] || '';
-          });
-          // Attach any unmapped leave codes as extra data (not output, just noted)
+          activeCodes.forEach(code => { row[code] = balances[code] || ''; });
           return row;
         });
       }
@@ -663,6 +798,7 @@
       `✓ ${rows.length} leave records loaded from "${originalFilename}" — ${PROVIDERS[detected].name} format detected`,
       'success'
     );
+    buildLeaveCodeGrid();
     setVisible('options-card', true);
     runConversion();
   }
@@ -678,24 +814,26 @@
 
   // ── Preview ────────────────────────────────────────────────────────────────
   function renderPreview() {
+    const cols  = getOutputHeaders();
     const max   = 10;
     const total = convertedRows.length;
     document.getElementById('preview-meta').textContent =
-      `${total} row${total !== 1 ? 's' : ''} ready to import` +
-      (total > max ? ` — showing first ${max}` : '');
+      `${total} employee${total !== 1 ? 's' : ''} · ${cols.length - 1} leave code${cols.length - 1 !== 1 ? 's' : ''} selected`;
 
-    let html = '<thead><tr>' + OUTPUT_HEADERS.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+    let html = '<thead><tr>' + cols.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
     convertedRows.slice(0, max).forEach(row => {
-      html += '<tr>' + OUTPUT_HEADERS.map(h => `<td>${esc(row[h])}</td>`).join('') + '</tr>';
+      html += '<tr>' + cols.map(h => `<td>${esc(row[h])}</td>`).join('') + '</tr>';
     });
+    if (total > max) html += `<tr><td colspan="${cols.length}" style="color:var(--gray-500);padding:8px 14px;font-style:italic">… and ${total - max} more employees</td></tr>`;
     document.getElementById('preview-table').innerHTML = html + '</tbody>';
   }
 
   // ── Download ───────────────────────────────────────────────────────────────
   function downloadCSV() {
+    const headers = getOutputHeaders();
     const lines = [
-      OUTPUT_HEADERS.map(cell).join(','),
-      ...convertedRows.map(row => OUTPUT_HEADERS.map(h => cell(row[h])).join(','))
+      headers.map(cell).join(','),
+      ...convertedRows.map(row => headers.map(h => cell(row[h])).join(','))
     ];
     const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
     const url  = URL.createObjectURL(blob);
@@ -711,6 +849,8 @@
     parsedRows = []; convertedRows = []; originalFilename = '';
     document.getElementById('file-input').value = '';
     document.getElementById('file-status').className = 'status';
+    // Reset all leave codes to selected
+    LEAVE_CODE_COLUMNS.forEach(c => selectedCodes.add(c.code));
     setVisible('options-card', false);
     setVisible('preview-card', false);
   }
