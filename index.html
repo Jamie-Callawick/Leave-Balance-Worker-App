@@ -450,10 +450,9 @@
           <div class="provider-icon">🔵</div>
           IMS / MYOB
         </div>
-        <div class="provider-btn disabled" data-provider="crystal-payroll">
-          <div class="provider-icon">🟣</div>
-          Crystal Payroll
-          <div class="provider-soon">Coming soon</div>
+        <div class="provider-btn" data-provider="rocket" onclick="selectProvider(this)">
+          <div class="provider-icon">🚀</div>
+          Rocket
         </div>
       </div>
     </div>
@@ -570,6 +569,12 @@
       { code: 'TIL Balance',     label: 'Time in Lieu Balance' },
       { code: 'CL Outstanding',  label: 'Company Leave Outstanding' },
       { code: 'SVL Outstanding', label: 'Service Leave Outstanding' },
+    ],
+    // Rocket: keep original TYPE codes as output columns. All balances in hours.
+    rocket: [
+      { code: 'AL',   label: 'Annual Leave (hours)' },
+      { code: 'ALT',  label: 'Alternative Holidays (hours)' },
+      { code: 'SICK', label: 'Sick Leave (hours)' },
     ],
   };
 
@@ -797,8 +802,58 @@
         }).filter(r => r !== null);
       }
     }
+    ,
 
-    // Future providers: crystal-payroll
+    rocket: {
+      name: 'Rocket',
+
+      // Detect: Rocket exports have a header row of exactly EMPLOYEE, TYPE, BAL
+      detect: (lines) => {
+        if (!lines.length) return false;
+        const h = parseCSVLine(lines[0]).map(c => c.toUpperCase());
+        return h[0] === 'EMPLOYEE' && h[1] === 'TYPE' && h[2] === 'BAL';
+      },
+
+      // Parse: row 0 = header, row 1+ = data (one row per employee per leave type)
+      parse: (lines) => {
+        const headers = parseCSVLine(lines[0]);
+        const rows = [];
+        for (let i = 1; i < lines.length; i++) {
+          if (!lines[i].trim()) continue;
+          const vals = parseCSVLine(lines[i]);
+          if (vals.length < 3) continue;
+          rows.push({
+            EMPLOYEE: (vals[0] || '').trim(),
+            TYPE:     (vals[1] || '').trim().toUpperCase(),
+            BAL:      (vals[2] || '').trim(),
+          });
+        }
+        return { headers, rows };
+      },
+
+      // Convert: pivot to one row per employee, one column per TYPE code.
+      // All balances are in hours.
+      convert: (rows, skipZero) => {
+        const empMap = new Map();
+        for (const r of rows) {
+          const empCode = r.EMPLOYEE;
+          if (!empCode) continue;
+          const balance = r.BAL;
+          if (skipZero === 'yes') {
+            if (!balance || balance === '' || parseFloat(balance) === 0) continue;
+          }
+          if (!empMap.has(empCode)) empMap.set(empCode, {});
+          empMap.get(empCode)[r.TYPE] = balance;
+        }
+
+        const activeCodes = getActiveColumns();
+        return Array.from(empMap.entries()).map(([empCode, balances]) => {
+          const row = { 'Employee Code': empCode };
+          activeCodes.forEach(code => { row[code] = balances[code] || ''; });
+          return row;
+        });
+      }
+    }
   };
 
   // ── Provider selection ─────────────────────────────────────────────────────
