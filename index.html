@@ -46,8 +46,24 @@
       padding: 0 32px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       height: 60px;
     }
+
+    .top-nav { display: flex; gap: 6px; }
+
+    .top-nav a {
+      color: rgba(255,255,255,.7);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      transition: background .15s, color .15s;
+    }
+
+    .top-nav a:hover { background: rgba(255,255,255,.1); color: #fff; }
+    .top-nav a.active { background: rgba(255,255,255,.14); color: #fff; }
 
     .logo {
       display: flex;
@@ -424,6 +440,10 @@
       </div>
       <span class="logo-text">Simplifi</span>
     </div>
+    <nav class="top-nav">
+      <a href="index.html" class="active">Leave Balance Converter</a>
+      <a href="customer-data-cleanser.html">Customer Data Cleanser</a>
+    </nav>
   </div>
 
   <!-- Hero -->
