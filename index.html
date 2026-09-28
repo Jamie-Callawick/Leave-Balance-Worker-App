@@ -46,8 +46,24 @@
       padding: 0 32px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       height: 60px;
     }
+
+    .top-nav { display: flex; gap: 6px; }
+
+    .top-nav a {
+      color: rgba(255,255,255,.7);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      transition: background .15s, color .15s;
+    }
+
+    .top-nav a:hover { background: rgba(255,255,255,.1); color: #fff; }
+    .top-nav a.active { background: rgba(255,255,255,.14); color: #fff; }
 
     .logo {
       display: flex;
@@ -424,6 +440,10 @@
       </div>
       <span class="logo-text">Simplifi</span>
     </div>
+    <nav class="top-nav">
+      <a href="index.html" class="active">Leave Balance Converter</a>
+      <a href="customer-data-cleanser.html">Customer Data Cleanser</a>
+    </nav>
   </div>
 
   <!-- Hero -->
@@ -513,6 +533,7 @@
         <span class="card-title">Preview &amp; download</span>
       </div>
       <div class="preview-meta" id="preview-meta"></div>
+      <div class="status" id="al-unit-notice"></div>
       <div class="preview-wrap">
         <table id="preview-table"></table>
       </div>
@@ -537,6 +558,10 @@
   let parsedRows       = [];
   let convertedRows    = [];
   let originalFilename = '';
+  // Units the Annual Leave (#70) balance came through in for the current file.
+  // Most Smartly exports give Balance (Hours); some (e.g. Age Care Central) leave
+  // hours blank and only populate Balance (Days).
+  let annualLeaveUnits = new Set();
 
   // ── Per-provider output columns ────────────────────────────────────────────
   const PROVIDER_COLUMNS = {
@@ -552,6 +577,7 @@
       { code: '#66', label: 'LWOP Taken' },
       { code: '#67', label: 'Domestic Leave Taken' },
       { code: '#70', label: 'Annual Leave Taken' },
+      { code: 'AL Accrued', label: 'Annual Leave Accrued (weeks, raw from Smartly)' },
       { code: '#71', label: 'Special Leave Taken' },
       { code: '#81', label: 'Alt Public Holidays Earned' },
       { code: '#84', label: 'Lieu Earned' },
@@ -721,18 +747,43 @@
       },
 
       // Convert: pivot to one row per employee, one column per leave code.
-      // Annual Leave uses Balance (Hours); all other types use Balance.
+      // Annual Leave uses Balance (Hours); if that's blank, falls back to
+      // Balance (Days) (export variant with the extra "Balance (Days)" column).
+      // All other types use Balance.
       convert: (rows, skipZero) => {
         // Build a map: empCode → { leaveCode: balance, ... }
         const empMap = new Map();
+        annualLeaveUnits = new Set();
 
         for (const r of rows) {
           const empCode  = r['Employee Code'] || '';
           if (!empCode) continue;
 
           const isAnnual = (r['Leave Type'] || '').toLowerCase() === 'annual leave';
-          const balance  = isAnnual ? r['Balance (Hours)'] : r['Balance'];
+          let balance;
+          if (isAnnual) {
+            const hours = r['Balance (Hours)'] || '';
+            const days  = r['Balance (Days)']  || '';
+            // Zero balances are zero in either unit, so they don't count towards the unit notice
+            if (hours !== '')      { balance = hours; if (parseFloat(hours)) annualLeaveUnits.add('Hours'); }
+            else if (days !== '')  { balance = days;  if (parseFloat(days))  annualLeaveUnits.add('Days'); }
+            else                   { balance = ''; }
+          } else {
+            balance = r['Balance'];
+          }
           const leaveCode = mapLeaveCode(r['Leave Type']);
+
+          // Annual Leave accrued — passed through raw from the "Accrued" column
+          // (in the row's Unit, normally Weeks). Captured independently of the
+          // balance so a zero balance doesn't hide a non-zero accrual.
+          if (isAnnual) {
+            const accrued = r['Accrued'] || '';
+            const skipAccrued = skipZero === 'yes' && (!accrued || parseFloat(accrued) === 0);
+            if (!skipAccrued) {
+              if (!empMap.has(empCode)) empMap.set(empCode, {});
+              empMap.get(empCode)['AL Accrued'] = accrued;
+            }
+          }
 
           // Skip zero/empty if option set — but only filter known codes
           if (skipZero === 'yes') {
@@ -954,7 +1005,23 @@
     document.getElementById('preview-meta').textContent =
       `${total} employee${total !== 1 ? 's' : ''} · ${cols.length - 1} leave code${cols.length - 1 !== 1 ? 's' : ''} selected`;
 
-    let html = '<thead><tr>' + cols.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+    // Annual Leave unit notice (Smartly only)
+    const alDays = selectedProvider === 'smartly' && annualLeaveUnits.has('Days') && cols.includes('#70');
+    const alMixed = alDays && annualLeaveUnits.has('Hours');
+    const unitEl = document.getElementById('al-unit-notice');
+    if (alDays) {
+      unitEl.className = 'status show warn';
+      unitEl.textContent = alMixed
+        ? '⚠ Annual Leave (#70) is MIXED in this file: some employees in hours, some in days (Balance (Hours) was blank for those rows). Check before importing.'
+        : '⚠ Annual Leave (#70) balances are in DAYS for this file — the export has no Balance (Hours) values. Make sure the import treats #70 as days.';
+    } else {
+      unitEl.className = 'status';
+      unitEl.textContent = '';
+    }
+    const alLabel = alMixed ? '#70 (Hours/Days)' : '#70 (Days)';
+    const th = h => (alDays && h === '#70') ? alLabel : h;
+
+    let html = '<thead><tr>' + cols.map(h => `<th>${th(h)}</th>`).join('') + '</tr></thead><tbody>';
     convertedRows.slice(0, max).forEach(row => {
       html += '<tr>' + cols.map(h => `<td>${esc(row[h])}</td>`).join('') + '</tr>';
     });
@@ -980,7 +1047,7 @@
 
   // ── Reset ──────────────────────────────────────────────────────────────────
   function reset() {
-    parsedRows = []; convertedRows = []; originalFilename = '';
+    parsedRows = []; convertedRows = []; originalFilename = ''; annualLeaveUnits = new Set();
     document.getElementById('file-input').value = '';
     document.getElementById('file-status').className = 'status';
     // Reset all leave codes to selected
