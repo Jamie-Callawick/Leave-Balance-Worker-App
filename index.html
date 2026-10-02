@@ -562,6 +562,9 @@
   // Most Smartly exports give Balance (Hours); some (e.g. Age Care Central) leave
   // hours blank and only populate Balance (Days).
   let annualLeaveUnits = new Set();
+  // IMS Total Leave report: units seen per balance field (e.g. AL in hours,
+  // SL / Alt in days) so the preview can flag them.
+  let imsTotalUnits = {};
 
   // ── Per-provider output columns ────────────────────────────────────────────
   const PROVIDER_COLUMNS = {
@@ -595,6 +598,15 @@
       { code: 'TIL Balance',     label: 'Time in Lieu Balance' },
       { code: 'CL Outstanding',  label: 'Company Leave Outstanding' },
       { code: 'SVL Outstanding', label: 'Service Leave Outstanding' },
+    ],
+    // IMS / MYOB "Total Leave" report (e.g. Total_Leave_YYYY_MM_DD.csv):
+    // a simpler single-header export. Original field names kept as output columns.
+    // AL figures are in hours; SL and Alt are in days (per the Unit columns).
+    'ims-total-leave': [
+      { code: 'AL Outstanding', label: 'Annual Leave Outstanding (hours)' },
+      { code: 'AL Advanced',    label: 'Annual Leave Advanced (hours)' },
+      { code: 'SL Balance',     label: 'Sick Leave Balance (days)' },
+      { code: 'Alt Balance',    label: 'Alternative Holidays Balance (days)' },
     ],
     // Rocket: keep original TYPE codes as output columns. All balances in hours.
     rocket: [
@@ -855,6 +867,61 @@
     }
     ,
 
+    // IMS / MYOB "Total Leave" report — second IMS export format.
+    // Header row 0: "Pay Point","Employee Name","Employee Number","AL Due Date",
+    // "AL Outstanding",...,"SL Balance","SL Unit",...,"Alt Balance","Alt Unit",...
+    // One row per employee, no active/inactive marker, $ values alongside balances.
+    'ims-total-leave': {
+      name: 'IMS / MYOB (Total Leave report)',
+      button: 'ims-myob', // shares the IMS / MYOB provider button
+
+      detect: (lines) => {
+        if (!lines.length) return false;
+        const h = parseCSVLine(lines[0].replace(/^\uFEFF/, ''));
+        return h.includes('Employee Number') &&
+               h.includes('AL Outstanding') &&
+               h.includes('SL Balance');
+      },
+
+      parse: (lines) => {
+        const headers = parseCSVLine(lines[0].replace(/^\uFEFF/, ''));
+        const rows = [];
+        for (let i = 1; i < lines.length; i++) {
+          if (!lines[i].trim()) continue;
+          const vals = parseCSVLine(lines[i]);
+          if (vals.length < 3) continue;
+          const obj = {};
+          headers.forEach((h, idx) => { if (h) obj[h.trim()] = (vals[idx] || '').trim(); });
+          if (!obj['Employee Number']) continue; // skip totals / blank rows
+          rows.push(obj);
+        }
+        return { headers, rows };
+      },
+
+      convert: (rows, skipZero) => {
+        const activeFields = getActiveColumns();
+        // Each balance field's unit comes from its matching "<prefix> Unit" column
+        const unitCol = f => f.split(' ')[0] + ' Unit';
+        imsTotalUnits = {};
+
+        return rows.map(r => {
+          const empCode = r['Employee Number'] || '';
+          if (!empCode) return null;
+          const row = { 'Employee Code': empCode };
+          activeFields.forEach(field => {
+            const balance = (r[field] || '').replace(/,/g, '');
+            const unit = (r[unitCol(field)] || '').toLowerCase();
+            if (unit && parseFloat(balance)) {
+              (imsTotalUnits[field] = imsTotalUnits[field] || new Set()).add(unit);
+            }
+            row[field] = (skipZero === 'yes' && (!balance || parseFloat(balance) === 0)) ? '' : balance;
+          });
+          return row;
+        }).filter(r => r !== null);
+      }
+    }
+    ,
+
     rocket: {
       name: 'Rocket',
 
@@ -912,7 +979,10 @@
     if (el.classList.contains('disabled')) return;
     document.querySelectorAll('.provider-btn').forEach(b => b.classList.remove('selected'));
     el.classList.add('selected');
-    selectedProvider = el.dataset.provider;
+    // Clicking the button that already owns the detected variant (e.g. IMS Total
+    // Leave under the IMS / MYOB button) keeps that variant.
+    const current = PROVIDERS[selectedProvider];
+    if (!(current && current.button === el.dataset.provider)) selectedProvider = el.dataset.provider;
     if (parsedRows.length) { buildLeaveCodeGrid(); runConversion(); }
   }
 
@@ -970,7 +1040,7 @@
     if (detected !== selectedProvider) {
       selectedProvider = detected;
       document.querySelectorAll('.provider-btn').forEach(b =>
-        b.classList.toggle('selected', b.dataset.provider === detected));
+        b.classList.toggle('selected', b.dataset.provider === (PROVIDERS[detected].button || detected)));
       // Reset selectedCodes for the newly detected provider
       selectedCodes.clear();
       getProviderColumns().forEach(c => selectedCodes.add(c.code));
@@ -1014,6 +1084,13 @@
       unitEl.textContent = alMixed
         ? '⚠ Annual Leave (#70) is MIXED in this file: some employees in hours, some in days (Balance (Hours) was blank for those rows). Check before importing.'
         : '⚠ Annual Leave (#70) balances are in DAYS for this file — the export has no Balance (Hours) values. Make sure the import treats #70 as days.';
+    } else if (selectedProvider === 'ims-total-leave' && cols.length > 1) {
+      const parts = cols.slice(1).map(f => {
+        const u = imsTotalUnits[f] ? [...imsTotalUnits[f]].join('/') : '—';
+        return `${f}: ${u}`;
+      });
+      unitEl.className = 'status show info';
+      unitEl.textContent = 'ℹ Units in this IMS Total Leave file — ' + parts.join(' · ') + '. Make sure the import treats each column in the right unit.';
     } else {
       unitEl.className = 'status';
       unitEl.textContent = '';
@@ -1047,7 +1124,7 @@
 
   // ── Reset ──────────────────────────────────────────────────────────────────
   function reset() {
-    parsedRows = []; convertedRows = []; originalFilename = ''; annualLeaveUnits = new Set();
+    parsedRows = []; convertedRows = []; originalFilename = ''; annualLeaveUnits = new Set(); imsTotalUnits = {};
     document.getElementById('file-input').value = '';
     document.getElementById('file-status').className = 'status';
     // Reset all leave codes to selected
