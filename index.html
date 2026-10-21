@@ -474,6 +474,10 @@
           <div class="provider-icon">🚀</div>
           Rocket
         </div>
+        <div class="provider-btn" data-provider="crystal" onclick="selectProvider(this)">
+          <div class="provider-icon">💎</div>
+          Crystal
+        </div>
       </div>
     </div>
 
@@ -487,10 +491,11 @@
            ondragover="onDragOver(event)" ondragleave="onDragLeave()" ondrop="onDrop(event)"
            onclick="document.getElementById('file-input').click()">
         <div class="dz-icon">📄</div>
-        <div class="dz-label">Drop your CSV file here</div>
+        <div class="dz-label">Drop your CSV or Excel file here</div>
         <div class="dz-sub">or <span class="dz-link">browse to upload</span></div>
+        <div class="dz-sub" style="margin-top:6px">Crystal: drop the Annual and Other Leave Liability reports (.xls) together</div>
       </div>
-      <input type="file" id="file-input" accept=".csv" onchange="onFileSelect(event)" />
+      <input type="file" id="file-input" accept=".csv,.xls,.xlsx" multiple onchange="onFileSelect(event)" />
       <div class="status" id="file-status"></div>
     </div>
 
@@ -514,10 +519,21 @@
         </select>
       </div>
 
+      <div class="option-row hidden" id="crystal-scope-option">
+        <div>
+          <div class="option-label">Employees to include</div>
+          <div class="option-desc">The Other Leave Liability report can list employees who aren't on the Annual Leave report (often terminated staff)</div>
+        </div>
+        <select id="crystal-scope" onchange="runConversion()">
+          <option value="all">All employees in either report</option>
+          <option value="annual">Only those on the Annual Leave report</option>
+        </select>
+      </div>
+
       <div class="option-row hidden" id="anniv-option">
         <div>
           <div class="option-label">Include leave anniversary dates</div>
-          <div class="option-desc">Adds a "Leave Anniversary Date - [code]" column after each leave code, from the IMS entitlement due date (dd/MM/yyyy)</div>
+          <div class="option-desc">Adds a "Leave Anniversary Date - [code]" column after each leave code, from the payroll's next entitlement / anniversary date (dd/MM/yyyy)</div>
         </div>
         <select id="include-anniv" onchange="runConversion()">
           <option value="yes">Yes — include them</option>
@@ -576,6 +592,9 @@
   // IMS Total Leave report: units seen per balance field (e.g. AL in hours,
   // SL / Alt in days) so the preview can flag them.
   let imsTotalUnits = {};
+  // Crystal Payroll: the reports loaded for the current job, keyed by kind
+  // ('annual' = Company Annual Leave Liability, 'other' = Company Other Leave Liability).
+  let crystalReports = {};
 
   // ── Per-provider output columns ────────────────────────────────────────────
   const PROVIDER_COLUMNS = {
@@ -627,10 +646,23 @@
       { code: 'ALT',  label: 'Alternative Holidays (hours)' },
       { code: 'SICK', label: 'Sick Leave (hours)' },
     ],
+    // Crystal Payroll: two Crystal Reports .xls exports. `report` = which one the
+    // value comes from — only columns for loaded reports are offered.
+    // AL figures are in hours; Sick / Alt are in days.
+    crystal: [
+      { code: 'AL Due Hours',     label: 'Annual Leave Due — entitled (hours)',          report: 'annual', anniv: 'AL Next Anniversary' },
+      { code: 'AL Accrued Hours', label: 'Annual Leave Accrued — not yet due (hours)',   report: 'annual', anniv: 'AL Next Anniversary' },
+      { code: 'AL Total Hours',   label: 'Annual Leave Total — due + accrued (hours)',   report: 'annual', anniv: 'AL Next Anniversary' },
+      { code: 'Sick Due Days',    label: 'Sick Leave Due (days)',                         report: 'other',  anniv: 'Sick Next Anniversary' },
+      { code: 'Alt Due Days',     label: 'Alternative Holidays Due (days)',               report: 'other' },
+    ],
   };
 
   function getProviderColumns() {
-    return PROVIDER_COLUMNS[selectedProvider] || PROVIDER_COLUMNS.smartly;
+    const cols = PROVIDER_COLUMNS[selectedProvider] || PROVIDER_COLUMNS.smartly;
+    if (selectedProvider === 'crystal' && Object.keys(crystalReports).length)
+      return cols.filter(c => crystalReports[c.report]);
+    return cols;
   }
 
   // Track which codes are selected (all on by default)
@@ -645,6 +677,7 @@
     getProviderColumns().forEach(c => selectedCodes.add(c.code));
     updateToggleBtn();
     setVisible('anniv-option', providerHasAnniv());
+    setVisible('crystal-scope-option', selectedProvider === 'crystal' && !!(crystalReports.annual && crystalReports.other));
     getProviderColumns().forEach(({ code, label }) => {
       const item = document.createElement('label');
       item.className = 'leave-code-item checked';
@@ -1013,7 +1046,270 @@
         });
       }
     }
+    ,
+
+    // Crystal Payroll — Crystal Reports .xls exports, read as a cell grid (see
+    // handleCrystal). "Company Annual Leave Liability" and "Company Other Leave
+    // Liability" are separate files; both can be loaded and are merged by employee.
+    crystal: {
+      name: 'Crystal Payroll',
+      detect: () => false, // detected from the sheet grid by detectCrystal()
+      parse: () => ({ headers: [], rows: crystalMerge() }),
+
+      convert: (rows, skipZero) => {
+        const activeFields = getActiveColumns();
+        const bothLoaded = crystalReports.annual && crystalReports.other;
+        const annualOnly = bothLoaded && document.getElementById('crystal-scope').value === 'annual';
+        return rows
+          .filter(r => !annualOnly || r._annual)
+          .map(r => {
+            const row = { 'Employee Code': r['Employee Code'] };
+            activeFields.forEach(field => {
+              const v = r[field] ?? '';
+              row[field] = (skipZero === 'yes' && (v === '' || parseFloat(v) === 0)) ? '' : v;
+              addAnniv(row, r, field);
+            });
+            return row;
+          })
+          // When skipping zeros, drop employees left with no balances at all
+          .filter(row => skipZero !== 'yes' || activeFields.some(f => row[f] !== ''));
+      }
+    }
   };
+
+  // ── Crystal Payroll helpers ────────────────────────────────────────────────
+  // Report layout (both files): title, company, "Report Date as at: dd/mm/yyyy",
+  // header row (Employee Name, Start Date, … Next Anniversary …), then Branch: /
+  // Department: group rows, employee rows "1234. First Last", and total rows.
+  // The Other Leave report has an extra group row above the header (Sick Leave /
+  // Alternative Holiday / Bereavement) — columns are named "<group>|<header>".
+  const CRYSTAL_TITLES = { 'annual holiday liability': 'annual', 'other leave liability': 'other' };
+  const CRYSTAL_LABEL  = { annual: 'Annual Leave Liability', other: 'Other Leave Liability' };
+  // source column → field name in the merged record
+  const CRYSTAL_FIELDS = {
+    annual: {
+      'Next Anniversary': 'AL Next Anniversary',
+      'Due Hours':        'AL Due Hours',
+      'Accrued Hours':    'AL Accrued Hours',
+      'Total Hours':      'AL Total Hours',
+    },
+    other: {
+      'Sick Leave|Next Anniversary':  'Sick Next Anniversary',
+      'Sick Leave|Due Days':          'Sick Due Days',
+      'Alternative Holiday|Due Days': 'Alt Due Days',
+    },
+  };
+
+  const cstr = v => (v == null ? '' : String(v)).trim();
+
+  function crystalKind(grid) {
+    for (let r = 0; r < Math.min(grid.length, 8); r++)
+      for (const v of grid[r] || []) {
+        const k = CRYSTAL_TITLES[cstr(v).toLowerCase()];
+        if (k) return k;
+      }
+    return null;
+  }
+  function crystalHeaderRow(grid) {
+    for (let r = 0; r < Math.min(grid.length, 15); r++) {
+      const row = (grid[r] || []).map(cstr);
+      if (row.includes('Employee Name') && row.includes('Next Anniversary')) return r;
+    }
+    return -1;
+  }
+  function detectCrystal(grid) { return !!crystalKind(grid) && crystalHeaderRow(grid) >= 0; }
+
+  // Excel serial date number (or d/m/yyyy text from a CSV save) → day number
+  function crystalSerial(v) {
+    if (typeof v === 'number') return v;
+    const m = cstr(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    return m ? Date.UTC(+m[3], +m[2] - 1, +m[1]) / 86400000 + 25569 : 0;
+  }
+  // → dd/MM/yyyy (blank if missing)
+  function crystalDate(v) {
+    if (typeof v === 'number' && v > 0) {
+      const d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
+      return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
+    }
+    return fmtAnnivDate(cstr(v));
+  }
+  // Crystal stores single-precision floats (e.g. 320.1999816894531) — round to 2 dp
+  function crystalNum(v) {
+    const s = cstr(v).replace(/,/g, '');
+    if (s === '') return '';
+    const n = typeof v === 'number' ? v : parseFloat(s);
+    if (!isFinite(n)) return '';
+    const r = Math.round(n * 100) / 100;
+    return String(Object.is(r, -0) ? 0 : r);
+  }
+  // Same employee listed twice (e.g. rehired): prefer the latest start date,
+  // then a name not in (brackets), then the later next-anniversary date, then a
+  // row with a pay rate, then the later row.
+  function crystalPrefer(a, b) {
+    if (a._start !== b._start) return a._start > b._start;
+    if (a._bracketed !== b._bracketed) return !a._bracketed;
+    if (a._anniv !== b._anniv) return a._anniv > b._anniv;
+    if (a._hasPay !== b._hasPay) return a._hasPay;
+    return true;
+  }
+
+  function parseCrystal(grid) {
+    const kind = crystalKind(grid);
+    const h = crystalHeaderRow(grid);
+    const header = (grid[h] || []).map(cstr);
+    const nameCol = header.indexOf('Employee Name');
+    const startCol = header.indexOf('Start Date');
+    const payCol = header.indexOf('Default Pay Rate');
+    const annivCol = header.indexOf('Next Anniversary');
+
+    // Column names, prefixed with the group heading above them (right of the name column)
+    const groupRow = h > 0 ? (grid[h - 1] || []).map(cstr) : [];
+    const names = [];
+    let group = '';
+    for (let c = 0; c < header.length; c++) {
+      if (c > nameCol && groupRow[c]) group = groupRow[c];
+      names[c] = header[c] ? (group ? `${group}|${header[c]}` : header[c]) : '';
+    }
+    const fieldCols = Object.entries(CRYSTAL_FIELDS[kind]).map(([src, key]) => [key, names.indexOf(src), src]);
+
+    // Company name + "as at" date from the title block
+    let company = '', reportDate = '';
+    for (let r = 0; r < h; r++) for (let c = 0; c <= Math.max(nameCol, 0); c++) {
+      const v = cstr((grid[r] || [])[c]);
+      if (!v) continue;
+      const m = v.match(/^Report Date as at:\s*(.+)$/i);
+      if (m) reportDate = m[1].trim();
+      else if (!CRYSTAL_TITLES[v.toLowerCase()] && !company) company = v;
+    }
+
+    const records = new Map(), dupes = new Set(), noCode = [];
+    for (let r = h + 1; r < grid.length; r++) {
+      const row = grid[r] || [];
+      const raw = cstr(row[nameCol]);
+      if (!raw) continue;
+      const m = raw.match(/^(\d+)\.\s*(.*)$/);
+      if (!m) {
+        // An employee line with no payroll number can't be matched in Simplifi
+        if (startCol >= 0 && cstr(row[startCol]) !== '' && !/total/i.test(raw)) noCode.push(raw);
+        continue;
+      }
+      const rec = {
+        code: m[1],
+        name: m[2].replace(/^\((.*)\)$/, '$1'),
+        _bracketed: /^\(.*\)$/.test(m[2]),
+        _start: crystalSerial(row[startCol]),
+        _anniv: crystalSerial(row[annivCol]),
+        _hasPay: payCol >= 0 && cstr(row[payCol]) !== '',
+      };
+      fieldCols.forEach(([key, c]) => {
+        rec[key] = c < 0 ? '' : (/Anniversary$/.test(key) ? crystalDate(row[c]) : crystalNum(row[c]));
+      });
+      const prev = records.get(rec.code);
+      if (prev) { dupes.add(rec.code); if (crystalPrefer(rec, prev)) records.set(rec.code, rec); }
+      else records.set(rec.code, rec);
+    }
+    return {
+      kind, company, reportDate, records,
+      dupes: [...dupes], noCode,
+      missing: fieldCols.filter(([, c]) => c < 0).map(([, , src]) => src.replace('|', ' – ')),
+    };
+  }
+
+  // One record per employee across the loaded reports, sorted by employee code
+  function crystalMerge() {
+    const map = new Map();
+    for (const kind of ['annual', 'other']) {
+      const rep = crystalReports[kind];
+      if (!rep) continue;
+      for (const rec of rep.records.values()) {
+        const e = map.get(rec.code) || { 'Employee Code': rec.code, _name: rec.name };
+        Object.values(CRYSTAL_FIELDS[kind]).forEach(k => { e[k] = rec[k]; });
+        e['_' + kind] = true;
+        map.set(rec.code, e);
+      }
+    }
+    return [...map.values()].sort((a, b) =>
+      a['Employee Code'].localeCompare(b['Employee Code'], undefined, { numeric: true }));
+  }
+
+  function handleCrystal(grid, filename) {
+    const rep = parseCrystal(grid);
+    rep.filename = filename;
+    // A second report for the same company adds to the current job; anything else starts fresh
+    const existing = Object.values(crystalReports)[0];
+    if (!(selectedProvider === 'crystal' && existing && existing.company === rep.company)) crystalReports = {};
+    crystalReports[rep.kind] = rep;
+
+    selectedProvider = 'crystal';
+    document.querySelectorAll('.provider-btn').forEach(b =>
+      b.classList.toggle('selected', b.dataset.provider === 'crystal'));
+
+    const kinds = ['annual', 'other'].filter(k => crystalReports[k]);
+    originalFilename = kinds.length > 1 ? `${rep.company || 'Crystal'} - Crystal leave balances` : filename;
+    parsedRows = crystalMerge();
+
+    const loaded = kinds.map(k => `${CRYSTAL_LABEL[k]} (${crystalReports[k].records.size} employees)`).join(' + ');
+    const missing = ['annual', 'other'].find(k => !crystalReports[k]);
+    showStatus(
+      `✓ Crystal Payroll format detected — ${loaded}` +
+      (rep.company ? ` · ${rep.company}` : '') +
+      (rep.reportDate ? ` · as at ${rep.reportDate}` : '') +
+      (missing ? `. Drop the ${CRYSTAL_LABEL[missing]} report too to add ${missing === 'other' ? 'sick and alternative holiday' : 'annual leave'} balances.` : ''),
+      'success'
+    );
+    buildLeaveCodeGrid();
+    setVisible('options-card', true);
+    runConversion();
+  }
+
+  // Lines for the preview notice: units, plus anything worth checking before import
+  function crystalNotices() {
+    const lines = ['ℹ Crystal units — AL columns are in hours; Sick and Alt columns are in days. Make sure the import treats each column in the right unit.'];
+    let warn = false;
+    const a = crystalReports.annual, o = crystalReports.other;
+    if (a && o && a.reportDate && o.reportDate && a.reportDate !== o.reportDate) {
+      warn = true;
+      lines.push(`⚠ The two reports have different "as at" dates (Annual ${a.reportDate}, Other ${o.reportDate}).`);
+    }
+    for (const k of ['annual', 'other']) {
+      const rep = crystalReports[k];
+      if (!rep) continue;
+      if (rep.missing.length) { warn = true; lines.push(`⚠ ${CRYSTAL_LABEL[k]}: couldn't find column(s) ${rep.missing.join(', ')} — those values are blank.`); }
+      if (rep.dupes.length) { warn = true; lines.push(`⚠ ${CRYSTAL_LABEL[k]}: employee ${rep.dupes.length === 1 ? 'code' : 'codes'} ${rep.dupes.join(', ')} ${rep.dupes.length === 1 ? 'is' : 'are'} listed more than once (e.g. rehires) — used the row with the latest start date. Check in Crystal.`); }
+      if (rep.noCode.length) { warn = true; lines.push(`⚠ ${CRYSTAL_LABEL[k]}: skipped ${rep.noCode.length} row(s) with no employee number — ${rep.noCode.join(', ')}.`); }
+    }
+    if (a && o) {
+      const only = [...o.records.keys()].filter(c => !a.records.has(c)).length;
+      if (only) lines.push(`ℹ ${only} employee${only === 1 ? ' is' : 's are'} on the Other Leave report but not the Annual Leave report (often terminated staff) — use "Employees to include" to leave them out.`);
+    }
+    return { lines, warn };
+  }
+
+  // ── Excel (.xls / .xlsx) reading — SheetJS, loaded only when needed ────────
+  const SHEETJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  let sheetJsPromise = null;
+  function loadSheetJS() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (!sheetJsPromise) sheetJsPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = SHEETJS_URL;
+      s.onload = () => resolve(window.XLSX);
+      s.onerror = () => { sheetJsPromise = null; reject(new Error("couldn't load the Excel reader — check your internet connection, or save the report as CSV and upload that")); };
+      document.head.appendChild(s);
+    });
+    return sheetJsPromise;
+  }
+
+  async function handleExcel(buf, filename) {
+    showStatus(`Reading "${filename}"…`, 'info');
+    const XLSX = await loadSheetJS();
+    const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '', blankrows: true });
+    if (detectCrystal(grid)) return handleCrystal(grid, filename);
+    // Any other provider's export saved as Excel: flatten to CSV and use the normal path
+    handleContent(XLSX.utils.sheet_to_csv(ws), filename);
+  }
 
   // ── Provider selection ─────────────────────────────────────────────────────
   function selectProvider(el) {
@@ -1044,32 +1340,59 @@
   function onDrop(e) {
     e.preventDefault();
     document.getElementById('dropzone').classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) processFile(file);
+    if (e.dataTransfer.files.length) processFiles(e.dataTransfer.files);
   }
-  function onFileSelect(e) { const f = e.target.files[0]; if (f) processFile(f); }
+  function onFileSelect(e) {
+    const files = [...e.target.files];
+    e.target.value = ''; // allow picking the same file again
+    if (files.length) processFiles(files);
+  }
 
   // ── File processing ────────────────────────────────────────────────────────
-  function processFile(file) {
-    if (!file.name.toLowerCase().endsWith('.csv')) {
-      showStatus('Please upload a .csv file.', 'error'); return;
-    }
-    originalFilename = file.name;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try { handleContent(e.target.result); }
-      catch (err) { showStatus('Could not read file: ' + err.message, 'error'); }
-    };
-    reader.readAsText(file, 'utf-8');
+  // Several files can be dropped at once and are processed in order
+  // (Crystal: the Annual + Other Leave Liability reports merge into one output).
+  async function processFiles(fileList) {
+    for (const f of [...fileList]) await processFile(f);
   }
 
-  function handleContent(content) {
+  function processFile(file) {
+    const lower = file.name.toLowerCase();
+    const isExcel = /\.xlsx?$/.test(lower);
+    if (!isExcel && !lower.endsWith('.csv')) {
+      showStatus('Please upload a .csv, .xls or .xlsx file.', 'error');
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          if (isExcel) await handleExcel(e.target.result, file.name);
+          else handleContent(e.target.result, file.name);
+        } catch (err) { showStatus('Could not read file: ' + err.message, 'error'); }
+        resolve();
+      };
+      reader.onerror = () => { showStatus('Could not read file.', 'error'); resolve(); };
+      if (isExcel) reader.readAsArrayBuffer(file); else reader.readAsText(file, 'utf-8');
+    });
+  }
+
+  function handleContent(content, filename) {
     const lines = content.split(/\r?\n/);
+
+    // Crystal Payroll reports (normally .xls, but a CSV save of one works too)
+    if (detectCrystal(lines.slice(0, 15).map(parseCSVLine))) {
+      return handleCrystal(lines.map(parseCSVLine), filename);
+    }
 
     // Auto-detect provider
     let detected = selectedProvider;
     for (const [key, p] of Object.entries(PROVIDERS)) {
       if (p.detect && p.detect(lines)) { detected = key; break; }
+    }
+
+    if (detected === 'crystal') {
+      showStatus("This doesn't look like a Crystal Payroll leave report. Upload the Company Annual Leave Liability and/or Company Other Leave Liability export (.xls).", 'warn');
+      return;
     }
 
     if (!PROVIDERS[detected]) {
@@ -1087,6 +1410,8 @@
       getProviderColumns().forEach(c => selectedCodes.add(c.code));
     }
 
+    crystalReports = {};
+    originalFilename = filename;
     const { rows } = PROVIDERS[detected].parse(lines);
     parsedRows = rows;
 
@@ -1135,6 +1460,10 @@
       });
       unitEl.className = 'status show info';
       unitEl.textContent = 'ℹ Units in this IMS Total Leave file — ' + parts.join(' · ') + '. Make sure the import treats each column in the right unit.';
+    } else if (selectedProvider === 'crystal') {
+      const { lines, warn } = crystalNotices();
+      unitEl.className = 'status show ' + (warn ? 'warn' : 'info');
+      unitEl.innerHTML = lines.map(esc).join('<br>');
     } else {
       unitEl.className = 'status';
       unitEl.textContent = '';
@@ -1161,14 +1490,14 @@
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = originalFilename.replace(/\.csv$/i, '') + '_simplifi_import.csv';
+    a.download = originalFilename.replace(/\.(csv|xlsx?)$/i, '') + '_simplifi_import.csv';
     a.click();
     URL.revokeObjectURL(url);
   }
 
   // ── Reset ──────────────────────────────────────────────────────────────────
   function reset() {
-    parsedRows = []; convertedRows = []; originalFilename = ''; annualLeaveUnits = new Set(); imsTotalUnits = {};
+    parsedRows = []; convertedRows = []; originalFilename = ''; annualLeaveUnits = new Set(); imsTotalUnits = {}; crystalReports = {};
     document.getElementById('file-input').value = '';
     document.getElementById('file-status').className = 'status';
     // Reset all leave codes to selected
@@ -1176,6 +1505,7 @@
     getProviderColumns().forEach(c => selectedCodes.add(c.code));
     setVisible('options-card', false);
     setVisible('preview-card', false);
+    setVisible('crystal-scope-option', false);
   }
 
   // ── CSV utilities ──────────────────────────────────────────────────────────
