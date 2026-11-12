@@ -491,11 +491,12 @@
            ondragover="onDragOver(event)" ondragleave="onDragLeave()" ondrop="onDrop(event)"
            onclick="document.getElementById('file-input').click()">
         <div class="dz-icon">📄</div>
-        <div class="dz-label">Drop your CSV or Excel file here</div>
+        <div class="dz-label">Drop your CSV, Excel or PDF file here</div>
         <div class="dz-sub">or <span class="dz-link">browse to upload</span></div>
         <div class="dz-sub" style="margin-top:6px">Crystal: drop the Annual and Other Leave Liability reports (.xls) together</div>
+        <div class="dz-sub">IMS / MYOB: the TOTAL LEAVE REPORT can be uploaded as a PDF</div>
       </div>
-      <input type="file" id="file-input" accept=".csv,.xls,.xlsx" multiple onchange="onFileSelect(event)" />
+      <input type="file" id="file-input" accept=".csv,.xls,.xlsx,.pdf" multiple onchange="onFileSelect(event)" />
       <div class="status" id="file-status"></div>
     </div>
 
@@ -592,6 +593,8 @@
   // IMS Total Leave report: units seen per balance field (e.g. AL in hours,
   // SL / Alt in days) so the preview can flag them.
   let imsTotalUnits = {};
+  // IMS Total Leave report printed to PDF: parse result (rows + checks) for the current file.
+  let imsPdf = null;
   // Crystal Payroll: the reports loaded for the current job, keyed by kind
   // ('annual' = Company Annual Leave Liability, 'other' = Company Other Leave Liability).
   let crystalReports = {};
@@ -637,6 +640,17 @@
     'ims-total-leave': [
       { code: 'AL Outstanding', label: 'Annual Leave Outstanding (hours)', anniv: 'AL Due Date' },
       { code: 'AL Advanced',    label: 'Annual Leave Advanced (hours)', anniv: 'AL Due Date' },
+      { code: 'SL Balance',     label: 'Sick Leave Balance (days)', anniv: 'SL Due Date' },
+      { code: 'Alt Balance',    label: 'Alternative Holidays Balance (days)' },
+    ],
+    // IMS / MYOB "TOTAL LEAVE REPORT" printed to PDF. Same report as the Total Leave
+    // CSV, but the print shows Accrued and Balance (= Outstanding + Accrued − Advanced)
+    // for AL. AL in hours; SL and Alt in days.
+    'ims-total-leave-pdf': [
+      { code: 'AL Outstanding', label: 'Annual Leave Outstanding — entitled (hours)', anniv: 'AL Due Date' },
+      { code: 'AL Accrued',     label: 'Annual Leave Accrued — not yet due (hours)', anniv: 'AL Due Date' },
+      { code: 'AL Advanced',    label: 'Annual Leave Advanced (hours)', anniv: 'AL Due Date' },
+      { code: 'AL Balance',     label: 'Annual Leave Balance — outstanding + accrued − advanced (hours)', anniv: 'AL Due Date' },
       { code: 'SL Balance',     label: 'Sick Leave Balance (days)', anniv: 'SL Due Date' },
       { code: 'Alt Balance',    label: 'Alternative Holidays Balance (days)' },
     ],
@@ -996,6 +1010,18 @@
     }
     ,
 
+    // IMS / MYOB "TOTAL LEAVE REPORT" as a PDF print (see handlePdf / parseImsPdfLines).
+    // Rows are built with the same field names and "<prefix> Unit" columns as the
+    // Total Leave CSV, so conversion is shared with 'ims-total-leave'.
+    'ims-total-leave-pdf': {
+      name: 'IMS / MYOB (Total Leave report — PDF)',
+      button: 'ims-myob',
+      detect: () => false, // PDFs are detected in handlePdf
+      parse: () => ({ headers: [], rows: imsPdf ? imsPdf.rows : [] }),
+      convert: (rows, skipZero) => PROVIDERS['ims-total-leave'].convert(rows, skipZero),
+    }
+    ,
+
     rocket: {
       name: 'Rocket',
 
@@ -1311,6 +1337,190 @@
     handleContent(XLSX.utils.sheet_to_csv(ws), filename);
   }
 
+  // ── PDF reading — pdf.js, loaded only when a PDF is dropped ───────────────
+  // Supports the IMS / MYOB "TOTAL LEAVE REPORT" print. Text is rebuilt into lines
+  // from each text item's on-page position, then parsed by parseImsPdfLines.
+  const PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+  const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  let pdfJsPromise = null;
+  function loadPdfJs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (!pdfJsPromise) pdfJsPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = PDFJS_URL;
+      s.onload = () => {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+        resolve(window.pdfjsLib);
+      };
+      s.onerror = () => { pdfJsPromise = null; reject(new Error("couldn't load the PDF reader — check your internet connection, or export the report as CSV and upload that")); };
+      document.head.appendChild(s);
+    });
+    return pdfJsPromise;
+  }
+
+  // PDF → array of text lines (top to bottom, all pages). Items on the same
+  // baseline are joined left to right; a visible gap becomes a space.
+  async function pdfToLines(buf) {
+    const pdfjsLib = await loadPdfJs();
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+    const out = [];
+    for (let p = 1; p <= doc.numPages; p++) {
+      const page = await doc.getPage(p);
+      const vt = page.getViewport({ scale: 1 }).transform; // handles page rotation
+      const { items } = await page.getTextContent();
+      const pts = items.filter(it => it.str && it.str.trim()).map(it => {
+        const t = pdfjsLib.Util.transform(vt, it.transform);
+        const size = Math.hypot(t[2], t[3]) || 1;
+        return { x: t[4], y: t[5], w: it.width, size, str: it.str };
+      });
+      pts.sort((a, b) => a.y - b.y || a.x - b.x);
+      const rows = [];
+      for (const pt of pts) {
+        const row = rows[rows.length - 1];
+        if (row && Math.abs(pt.y - row.y) <= Math.max(2, pt.size * 0.4)) row.items.push(pt);
+        else rows.push({ y: pt.y, items: [pt] });
+      }
+      for (const row of rows) {
+        row.items.sort((a, b) => a.x - b.x);
+        let line = '', end = null;
+        for (const it of row.items) {
+          if (end !== null && it.x - end > it.size * 0.15) line += ' ';
+          line += it.str;
+          end = it.x + it.w;
+        }
+        out.push(line.replace(/\s+/g, ' ').trim());
+      }
+    }
+    return out;
+  }
+
+  function isImsTotalLeavePdf(lines) {
+    const head = lines.slice(0, 40).join('\n').toUpperCase();
+    return head.includes('TOTAL LEAVE REPORT') && head.includes('ANNUAL LEAVE') && head.includes('SICK LEAVE');
+  }
+
+  // Parse the IMS TOTAL LEAVE REPORT lines. Employee line:
+  //   [Emp No] SURNAME, First  [AL due date  outstanding  accrued  advanced  balance hrs  [value]]
+  //   [SL due date]  [SL balance days  [value]]  [Alt balance days  [value]]
+  // AL / SL parts are blank for employees without that leave. Names are truncated
+  // to ~20 chars by IMS. A missing employee number is kept so it can be reported.
+  function parseImsPdfLines(lines) {
+    const D = '(\\d{1,2}/\\d{1,2}/\\d{4})';
+    const N = '(-?[\\d,]*\\.\\d+-?)';
+    const V = '(?:\\s+\\$?-?[\\d,]*\\.\\d+-?)?'; // optional $ VALUE column
+    const empRe = new RegExp(
+      '^(?:(\\d+)\\s+)?([^\\d]+?)' +
+      `(?:\\s+${D}\\s+${N}\\s+${N}\\s+${N}\\s+${N}\\s*hrs${V})?` +
+      `(?:\\s+${D})?` +
+      `(?:\\s+${N}\\s*days${V})?` +
+      `(?:\\s+${N}\\s*days${V})?\\s*$`, 'i');
+    const num = s => {
+      if (s == null || s === '') return '';
+      const neg = /-/.test(s);
+      const v = parseFloat(s.replace(/[,$-]/g, ''));
+      return isNaN(v) ? '' : (neg ? -v : v).toFixed(2);
+    };
+    const res = { rows: [], noNumber: [], unread: [], company: '', reportingDate: '', totals: null };
+    for (const line of lines) {
+      if (!line) continue;
+      if (!res.company && /^MYOB\s*\|\s*IMS PAYROLL/i.test(line))
+        res.company = line.replace(/^MYOB\s*\|\s*IMS PAYROLL\s*/i, '').replace(/\s*Page:\s*\d+\s*$/i, '').trim();
+      const rd = line.match(/Reporting Date:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
+      if (rd && !res.reportingDate) res.reportingDate = rd[1];
+      if (/^GRAND TOTALS/i.test(line)) {
+        const n = (line.match(/-?[\d,]*\.\d+-?/g) || []).map(num).map(Number);
+        if (n.length >= 6) res.totals = { out: n[0], acc: n[1], adv: n[2], bal: n[3], sl: n[4], alt: n[5] };
+        continue;
+      }
+      if (!/\b(hrs|days)\b/i.test(line)) continue; // headers, titles, page furniture
+      const m = line.match(empRe);
+      if (!m || !/[A-Za-z]/.test(m[2])) { res.unread.push(line); continue; }
+      const [, code, name, alDue, out, acc, adv, bal, slDue, sl, alt] = m;
+      const row = {
+        'Employee Number': code || '',
+        'Employee Name':   name.trim(),
+        'AL Due Date':     alDue || '',
+        'AL Outstanding':  num(out),
+        'AL Accrued':      num(acc),
+        'AL Advanced':     num(adv),
+        'AL Balance':      num(bal),
+        'AL Unit':         bal != null ? 'hours' : '',
+        'SL Due Date':     slDue || '',
+        'SL Balance':      num(sl),
+        'SL Unit':         sl != null ? 'days' : '',
+        'Alt Balance':     num(alt),
+        'Alt Unit':        alt != null ? 'days' : '',
+      };
+      if (!row['Employee Number']) { res.noNumber.push(row); continue; }
+      res.rows.push(row);
+    }
+    // Cross-check: every employee line (numbered or not) should add up to GRAND TOTALS
+    if (res.totals) {
+      const all = res.rows.concat(res.noNumber);
+      const sum = f => all.reduce((s, r) => s + (parseFloat(r[f]) || 0), 0);
+      const pairs = [['out', 'AL Outstanding'], ['acc', 'AL Accrued'], ['adv', 'AL Advanced'], ['bal', 'AL Balance'], ['sl', 'SL Balance'], ['alt', 'Alt Balance']];
+      res.totalsMismatch = pairs.filter(([k, f]) => Math.abs(sum(f) - res.totals[k]) > 0.05).map(([, f]) => f);
+    }
+    return res;
+  }
+
+  async function handlePdf(buf, filename) {
+    showStatus(`Reading "${filename}"…`, 'info');
+    const lines = await pdfToLines(buf);
+    if (!lines.length) {
+      showStatus("This PDF has no readable text (it may be a scan). Export the IMS Total Leave report as CSV and upload that instead.", 'error');
+      return;
+    }
+    if (!isImsTotalLeavePdf(lines)) {
+      showStatus("This PDF isn't a supported report. PDF upload currently supports the IMS / MYOB TOTAL LEAVE REPORT only.", 'warn');
+      return;
+    }
+    const res = parseImsPdfLines(lines);
+    if (!res.rows.length) {
+      showStatus("No employee lines could be read from this IMS Total Leave PDF. Export the report as CSV and upload that instead.", 'error');
+      return;
+    }
+    imsPdf = res;
+    crystalReports = {};
+    originalFilename = filename;
+    selectedProvider = 'ims-total-leave-pdf';
+    document.querySelectorAll('.provider-btn').forEach(b =>
+      b.classList.toggle('selected', b.dataset.provider === 'ims-myob'));
+    parsedRows = res.rows;
+    showStatus(
+      `✓ ${res.rows.length} employees loaded from "${filename}" — ${PROVIDERS[selectedProvider].name} format detected` +
+      (res.company ? ` (${res.company}${res.reportingDate ? ', reporting date ' + res.reportingDate : ''})` : ''),
+      'success'
+    );
+    buildLeaveCodeGrid();
+    setVisible('options-card', true);
+    runConversion();
+  }
+
+  // Preview notices for the IMS PDF: skipped employees and the GRAND TOTALS check
+  function imsPdfNotices() {
+    const lines = []; let warn = false;
+    if (!imsPdf) return { lines, warn };
+    if (imsPdf.noNumber.length) {
+      warn = true;
+      lines.push(`⚠ ${imsPdf.noNumber.length} employee${imsPdf.noNumber.length === 1 ? ' has' : 's have'} no employee number in the PDF and ${imsPdf.noNumber.length === 1 ? 'was' : 'were'} skipped: ${imsPdf.noNumber.map(r => r['Employee Name']).join('; ')}`);
+    }
+    if (imsPdf.unread.length) {
+      warn = true;
+      lines.push(`⚠ ${imsPdf.unread.length} line${imsPdf.unread.length === 1 ? '' : 's'} in the PDF couldn't be read and ${imsPdf.unread.length === 1 ? 'was' : 'were'} skipped: ${imsPdf.unread.slice(0, 3).join(' | ')}${imsPdf.unread.length > 3 ? ' …' : ''}`);
+    }
+    if (!imsPdf.totals) {
+      warn = true;
+      lines.push('⚠ No GRAND TOTALS line found, so the PDF read could not be cross-checked. Compare a few employees against the report before importing.');
+    } else if (imsPdf.totalsMismatch.length) {
+      warn = true;
+      lines.push(`⚠ Totals read from the PDF don't match its GRAND TOTALS for: ${imsPdf.totalsMismatch.join(', ')}. Check the file before importing, or use the CSV export.`);
+    } else {
+      lines.push('✓ All balances read from the PDF add up to its GRAND TOTALS line.');
+    }
+    return { lines, warn };
+  }
+
   // ── Provider selection ─────────────────────────────────────────────────────
   function selectProvider(el) {
     if (el.classList.contains('disabled')) return;
@@ -1358,8 +1568,9 @@
   function processFile(file) {
     const lower = file.name.toLowerCase();
     const isExcel = /\.xlsx?$/.test(lower);
-    if (!isExcel && !lower.endsWith('.csv')) {
-      showStatus('Please upload a .csv, .xls or .xlsx file.', 'error');
+    const isPdf = lower.endsWith('.pdf');
+    if (!isExcel && !isPdf && !lower.endsWith('.csv')) {
+      showStatus('Please upload a .csv, .xls, .xlsx or .pdf file.', 'error');
       return Promise.resolve();
     }
     return new Promise(resolve => {
@@ -1367,12 +1578,13 @@
       reader.onload = async (e) => {
         try {
           if (isExcel) await handleExcel(e.target.result, file.name);
+          else if (isPdf) await handlePdf(e.target.result, file.name);
           else handleContent(e.target.result, file.name);
         } catch (err) { showStatus('Could not read file: ' + err.message, 'error'); }
         resolve();
       };
       reader.onerror = () => { showStatus('Could not read file.', 'error'); resolve(); };
-      if (isExcel) reader.readAsArrayBuffer(file); else reader.readAsText(file, 'utf-8');
+      if (isExcel || isPdf) reader.readAsArrayBuffer(file); else reader.readAsText(file, 'utf-8');
     });
   }
 
@@ -1411,6 +1623,7 @@
     }
 
     crystalReports = {};
+    imsPdf = null;
     originalFilename = filename;
     const { rows } = PROVIDERS[detected].parse(lines);
     parsedRows = rows;
@@ -1460,6 +1673,14 @@
       });
       unitEl.className = 'status show info';
       unitEl.textContent = 'ℹ Units in this IMS Total Leave file — ' + parts.join(' · ') + '. Make sure the import treats each column in the right unit.';
+    } else if (selectedProvider === 'ims-total-leave-pdf') {
+      const { lines, warn } = imsPdfNotices();
+      if (getActiveColumns().length) {
+        const parts = getActiveColumns().map(f => `${f}: ${imsTotalUnits[f] ? [...imsTotalUnits[f]].join('/') : '—'}`);
+        lines.unshift('ℹ Units in this IMS Total Leave PDF — ' + parts.join(' · ') + '. Make sure the import treats each column in the right unit.');
+      }
+      unitEl.className = 'status show ' + (warn ? 'warn' : 'info');
+      unitEl.innerHTML = lines.map(esc).join('<br>');
     } else if (selectedProvider === 'crystal') {
       const { lines, warn } = crystalNotices();
       unitEl.className = 'status show ' + (warn ? 'warn' : 'info');
@@ -1490,14 +1711,14 @@
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = originalFilename.replace(/\.(csv|xlsx?)$/i, '') + '_simplifi_import.csv';
+    a.download = originalFilename.replace(/\.(csv|xlsx?|pdf)$/i, '') + '_simplifi_import.csv';
     a.click();
     URL.revokeObjectURL(url);
   }
 
   // ── Reset ──────────────────────────────────────────────────────────────────
   function reset() {
-    parsedRows = []; convertedRows = []; originalFilename = ''; annualLeaveUnits = new Set(); imsTotalUnits = {}; crystalReports = {};
+    parsedRows = []; convertedRows = []; originalFilename = ''; annualLeaveUnits = new Set(); imsTotalUnits = {}; crystalReports = {}; imsPdf = null;
     document.getElementById('file-input').value = '';
     document.getElementById('file-status').className = 'status';
     // Reset all leave codes to selected
